@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solana Memecoin Radar</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#eef1f4;--panel:#fff;--ink:#14202b;--mute:#5d6b78;--line:#d8dee4;--gain:#0b8a66;--loss:#cf3f46;--warn:#a96a0a;--warnbg:#fbf0dc;--lossbg:#fbe4e5;--accent:#1f5fbf}
+@media(prefers-color-scheme:dark){:root{--bg:#10171e;--panel:#18222c;--ink:#e6ecf1;--mute:#93a1ae;--line:#2a3743;--gain:#3ccf9f;--loss:#ff7a80;--warn:#e8b25a;--warnbg:#3a2f18;--lossbg:#3d2124;--accent:#7aaeff}}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:14px/1.45 "IBM Plex Sans",system-ui,sans-serif;font-variant-numeric:tabular-nums;padding:16px}
+.wrap{max-width:1280px;margin:0 auto}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:baseline;justify-content:space-between;margin-bottom:12px}
+h1{font-size:22px;font-weight:600;margin:0;letter-spacing:-.01em}
+#status{color:var(--mute);font-size:13px}
+.summary{display:flex;flex-wrap:wrap;gap:20px;margin:0 0 12px;color:var(--mute);font-size:13px}
+.summary b{color:var(--ink);font-weight:600;font-size:16px;margin-right:4px}
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:end;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:10px 12px;margin-bottom:12px}
+label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--mute)}
+label.row{flex-direction:row;align-items:center;gap:6px;padding-bottom:6px}
+input,select,button{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:5px 8px}
+input[type=number]{width:110px}input[type=search]{width:150px}
+input[type=checkbox]{width:auto}
+button{cursor:pointer;background:var(--accent);color:#fff;border-color:var(--accent);font-weight:500}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tablewrap{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:6px;max-height:75vh}
+table{border-collapse:collapse;width:100%;min-width:1000px}
+th,td{padding:8px 10px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}
+th.l,td.l{text-align:left}
+th{position:sticky;top:0;background:var(--panel);font-weight:500;color:var(--mute);cursor:pointer;user-select:none;z-index:1;box-shadow:0 1px 0 var(--line)}
+th.on{color:var(--ink)}
+th.on::after{content:attr(data-arrow);margin-left:4px}
+tr:hover td{background:color-mix(in srgb,var(--accent) 6%,transparent)}
+.sym{font-weight:600}.nm{color:var(--mute);font-size:12px;max-width:150px;overflow:hidden;text-overflow:ellipsis}
+.up{color:var(--gain)}.down{color:var(--loss)}
+.tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:3px;margin-right:4px;background:var(--warnbg);color:var(--warn)}
+.tag.hi{background:var(--lossbg);color:var(--loss)}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+.empty,.err{padding:24px;text-align:center;color:var(--mute)}.err{color:var(--loss)}
+footer{margin-top:12px;color:var(--mute);font-size:12px;max-width:80ch}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header><h1>Solana Memecoin Radar</h1><span id="status">Loading…</span></header>
+<div class="summary" id="summary"></div>
+<div class="controls">
+  <label>Search<input type="search" id="q" placeholder="Name or symbol"></label>
+  <label>Min liquidity ($)<input type="number" id="minLiq" value="10000" min="0" step="1000"></label>
+  <label>Min 24h volume ($)<input type="number" id="minVol" value="50000" min="0" step="10000"></label>
+  <label>Max age<select id="maxAge"><option value="0">Any</option><option value="1">1 hour</option><option value="6">6 hours</option><option value="24">24 hours</option><option value="72">3 days</option><option value="168">7 days</option></select></label>
+  <label class="row"><input type="checkbox" id="hideRisk"> Hide high-risk</label>
+  <label>Auto-refresh<select id="auto"><option value="0">Off</option><option value="30" selected>30 s</option><option value="60">60 s</option></select></label>
+  <button id="refresh">Refresh now</button>
+</div>
+<div class="tablewrap"><table>
+<thead><tr id="head"></tr></thead>
+<tbody id="body"></tbody>
+</table></div>
+<footer>Data from DexScreener's public API: tokens that are boosted, newly profiled or searched on Solana. Risk flags are rough heuristics from liquidity, age, volume and trade balance. Holder concentration is not in this data, so use the Check link (RugCheck) before anything else. Not financial advice; most of these tokens go to zero.</footer>
+</div>
+<script>
+const API='https://api.dexscreener.com';
+const SOURCES=['/token-boosts/top/v1','/token-boosts/latest/v1','/token-profiles/latest/v1'];
+const SKIP=new Set(['SOL','WSOL','USDC','USDT','USDS','JITOSOL','MSOL']);
+const COLS=[
+ ['sym','Token',1],['price','Price'],['m5','5m'],['h1','1h'],['h6','6h'],['h24','24h'],
+ ['vol24','24h volume'],['liq','Liquidity'],['mc','Market cap'],['age','Age'],['flow','1h buys / sells'],['flags','Flags',1],['links','Links',1]
+];
+let rows=[],sortKey='vol24',sortDir=-1,timer=null,busy=false;
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const compact=new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:1});
+const usd=n=>n?'$'+compact.format(n):'–';
+function price(p){if(!p)return '–';if(p>=1)return '$'+p.toFixed(2);return '$'+p.toFixed(Math.min(10,2-Math.floor(Math.log10(p))))}
+function pct(v){if(v==null)return '<td class="">–</td>';return `<td class="${v>=0?'up':'down'}">${v>=0?'+':''}${v.toFixed(Math.abs(v)>=100?0:1)}%</td>`}
+function age(ms){if(!ms)return '–';const m=ms/60000;if(m<60)return Math.max(1,Math.round(m))+'m';const h=m/60;if(h<48)return Math.round(h)+'h';return Math.round(h/24)+'d'}
+
+async function getJSON(path){const r=await fetch(API+path);if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}
+
+function norm(p){
+  const liq=p.liquidity?.usd||0, mc=p.marketCap||p.fdv||0, created=p.pairCreatedAt||0;
+  const t={addr:p.baseToken.address,sym:p.baseToken.symbol||'?',name:p.baseToken.name||'',price:+p.priceUsd||0,
+    m5:p.priceChange?.m5,h1:p.priceChange?.h1,h6:p.priceChange?.h6,h24:p.priceChange?.h24,
+    vol24:p.volume?.h24||0,liq,mc,age:created?Date.now()-created:0,
+    buys:p.txns?.h1?.buys||0,sells:p.txns?.h1?.sells||0,url:p.url,dex:p.dexId};
+  const f=[];let hi=0;
+  if(t.age&&t.age<3600e3)f.push(['New (<1h)',0]);
+  if(liq<10000){f.push(['Thin liquidity',1]);hi++}
+  if(mc&&liq/mc<0.02){f.push(['Low liq vs cap',1]);hi++}
+  if(liq&&t.vol24/liq>50){f.push(['Volume ≫ liquidity',0])}
+  if(t.sells>20&&t.sells>t.buys*1.5)f.push(['Sell pressure',0]);
+  t.flags=f;t.high=hi>=2||(liq<5000);
+  return t;
+}
+
+async function load(){
+  if(busy)return;busy=true;$('status').textContent='Updating…';
+  try{
+    const res=await Promise.allSettled([...SOURCES.map(getJSON),getJSON('/latest/dex/search?q=solana')]);
+    const addrs=new Set(),pairs=[];
+    res.slice(0,3).forEach(r=>{if(r.status==='fulfilled'&&Array.isArray(r.value))r.value.forEach(t=>{if(t.chainId==='solana'&&t.tokenAddress)addrs.add(t.tokenAddress)})});
+    if(res[3].status==='fulfilled')(res[3].value.pairs||[]).forEach(p=>{if(p.chainId==='solana')pairs.push(p)});
+    const list=[...addrs];
+    for(let i=0;i<list.length;i+=30){
+      try{const d=await getJSON('/tokens/v1/solana/'+list.slice(i,i+30).join(','));if(Array.isArray(d))pairs.push(...d)}catch(e){}
+    }
+    if(!pairs.length)throw new Error('No data returned');
+    const best=new Map();
+    pairs.forEach(p=>{
+      if(!p.baseToken||SKIP.has((p.baseToken.symbol||'').toUpperCase()))return;
+      const k=p.baseToken.address,cur=best.get(k);
+      if(!cur||(p.liquidity?.usd||0)>(cur.liquidity?.usd||0))best.set(k,p);
+    });
+    rows=[...best.values()].map(norm);
+    $('status').textContent='Updated '+new Date().toLocaleTimeString();
+    render();
+  }catch(e){
+    $('status').textContent='Update failed';
+    $('body').innerHTML=`<tr><td colspan="${COLS.length}" class="err">Could not load DexScreener data (${esc(e.message)}). Open this file in your own browser with an internet connection and press Refresh now.</td></tr>`;
+  }finally{busy=false}
+}
+
+function val(r,k){return k==='sym'?r.sym.toLowerCase():k==='flags'?r.flags.length:r[k]??-Infinity}
+
+function render(){
+  const q=$('q').value.trim().toLowerCase(),minLiq=+$('minLiq').value||0,minVol=+$('minVol').value||0,
+        maxAge=(+$('maxAge').value||0)*3600e3,hide=$('hideRisk').checked;
+  let v=rows.filter(r=>r.liq>=minLiq&&r.vol24>=minVol&&(!maxAge||(r.age&&r.age<=maxAge))&&(!hide||!r.high)
+    &&(!q||r.sym.toLowerCase().includes(q)||r.name.toLowerCase().includes(q)));
+  v.sort((a,b)=>{const x=val(a,sortKey),y=val(b,sortKey);return (x<y?-1:x>y?1:0)*sortDir});
+  const up=v.filter(r=>r.h24>0).length;
+  $('summary').innerHTML=`<span><b>${v.length}</b>tokens shown</span><span><b class="up">${up}</b>up 24h</span><span><b class="down">${v.filter(r=>r.h24<0).length}</b>down 24h</span><span><b>${usd(v.reduce((s,r)=>s+r.vol24,0))}</b>combined 24h volume</span>`;
+  $('head').innerHTML=COLS.map(([k,l,left])=>{
+    const on=k===sortKey;return `<th data-k="${k}" class="${left?'l ':''}${on?'on':''}" ${on?`data-arrow="${sortDir<0?'↓':'↑'}"`:''} tabindex="0">${l}</th>`}).join('');
+  if(!v.length){$('body').innerHTML=`<tr><td colspan="${COLS.length}" class="empty">No tokens match these filters. Lower the minimum liquidity or volume.</td></tr>`;return}
+  $('body').innerHTML=v.slice(0,150).map(r=>{
+    const link=(r.url&&r.url.startsWith('https://dexscreener.com/'))?r.url:'https://dexscreener.com/solana/'+encodeURIComponent(r.addr);
+    const tags=r.flags.map(([t,h])=>`<span class="tag${h?' hi':''}">${esc(t)}</span>`).join('')||'<span class="nm">–</span>';
+    return `<tr><td><div class="sym">${esc(r.sym)}</div><div class="nm">${esc(r.name)}</div></td>
+      <td>${price(r.price)}</td>${pct(r.m5)}${pct(r.h1)}${pct(r.h6)}${pct(r.h24)}
+      <td>${usd(r.vol24)}</td><td>${usd(r.liq)}</td><td>${usd(r.mc)}</td><td>${age(r.age)}</td>
+      <td><span class="up">${r.buys}</span> / <span class="down">${r.sells}</span></td>
+      <td class="l">${tags}</td>
+      <td class="l"><a href="${esc(link)}" target="_blank" rel="noopener noreferrer">Chart</a> · <a href="https://rugcheck.xyz/tokens/${encodeURIComponent(r.addr)}" target="_blank" rel="noopener noreferrer">Check</a></td></tr>`}).join('');
+}
+
+function setAuto(){clearInterval(timer);const s=+$('auto').value;if(s)timer=setInterval(load,s*1000)}
+function sortBy(th){const k=th&&th.dataset.k;if(!k||k==='links')return;if(k===sortKey)sortDir*=-1;else{sortKey=k;sortDir=(k==='sym')?1:-1}render()}
+$('head').addEventListener('click',e=>sortBy(e.target.closest('th')));
+$('head').addEventListener('keydown',e=>{if(e.key==='Enter')sortBy(e.target.closest('th'))});
+['q','minLiq','minVol','maxAge','hideRisk'].forEach(id=>$(id).addEventListener('input',render));
+$('auto').addEventListener('change',setAuto);
+$('refresh').addEventListener('click',load);
+render();load();setAuto();
+</script>
+</body>
+</html>
